@@ -195,10 +195,11 @@ class ReportingTask {
 
         // Retrive Outlet Id's
         let listoutletid = [];
+        let observerAffiliateList = [];
         if(outletid === 'alloutlet') {
             if (observer) {
                 const owner = await UsersModel.query().where('id', owner_id).first();
-                const observerAffiliateList = JSON.parse(owner.affiliate);
+                observerAffiliateList = JSON.parse(owner.affiliate);
                 let outlets = await OutletModel.query().select('id')
                 .whereIn('owner_id', observerAffiliateList)
                 .where('status', 'Premium')
@@ -266,6 +267,16 @@ class ReportingTask {
         const productQuery = ProductsModel.query().withTrashed().whereIn('products_id', neededProductIDs);
         const recipesQuery = RecipeModel.query().withTrashed().whereIn('id', neededRecipeIDs);
 
+        if(observer) {
+            productQuery.whereIn('owner_id', observerAffiliateList);
+            recipesQuery.whereIn('owner_id', observerAffiliateList);
+        } else {
+            productQuery.whereIn('owner_id', owner_id);
+            recipesQuery.whereIn('owner_id', owner_id);
+        }
+
+        const products = (await productQuery.get()).keyBy('products_id');
+        const productOutlets = ProductOutletModel.query().whereIn('outlet_id', listoutletid).whereIn('products_id', neededProductIDs).get();
     }
 
     async isObserver(owner_id) {
