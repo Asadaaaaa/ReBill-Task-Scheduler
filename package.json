@@ -1,0 +1,26 @@
+{
+  "name": "rebill-reporting",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./src/Main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "imports": {
+    "#helpers": "./src/helpers/index.js",
+    "#models": "./src/models/index.js",
+    "#tasks": "./src/tasks/index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cron": "^4.3.3",
+    "dotenv": "^17.2.3",
+    "file-type": "^21.0.0",
+    "fs-extra": "^11.3.2",
+    "moment-timezone": "^0.5.45",
+    "mysql2": "^3.15.3",
+    "sutando": "^1.7.3"
+  }
+}
