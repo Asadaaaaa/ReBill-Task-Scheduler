@@ -21,8 +21,6 @@ class ReportingTask {
     }
 
     async run(start = null, end = null, exclusiveOwnerId = null) {
-        this.getDailyReport(start, 'alloutlet', null, exclusiveOwnerId);
-        return;
         try {
             // Get owners (level="owner" or "observer", verified=1, id != 1, id != 3)
             let ownersQuery = UsersModel.query()
@@ -38,10 +36,10 @@ class ReportingTask {
             const owners = await ownersQuery.select('id', 'created_at', 'name', 'affiliate').get();
             const ownersArray = Array.isArray(owners) ? owners : (owners?.toArray ? owners.toArray() : []);
             
-            this.server.sendLogs(`Active User Count: ${ownersArray.length}`);
+            // this.server.sendLogs(`Active User Count: ${ownersArray.length}`);
 
             for (const owner of ownersArray) {
-                this.server.sendLogs(`Processing Owner: ${owner.name}`);
+                // this.server.sendLogs(`Processing Owner: ${owner.name}`);
 
                 // Get outlets for owner
                 let outlets = await OutletModel.query()
@@ -67,13 +65,13 @@ class ReportingTask {
 
                 // Process each outlet
                 for (const outlet of outletsArray) {
-                    this.server.sendLogs(`Processing Outlet: ${owner.name} => ${outlet.outlet_name}`);
+                    // this.server.sendLogs(`Processing Outlet: ${owner.name} => ${outlet.outlet_name}`);
                     await this.saveAllOutletReport(outlet.id, owner.id, start, end);
                 }
 
                 // Process each outlet with staff reports
                 for (const outlet of outletsArray) {
-                    this.server.sendLogs(`Processing Outlet: ${owner.name} => ${outlet.outlet_name}`);
+                    // this.server.sendLogs(`Processing Outlet: ${owner.name} => ${outlet.outlet_name}`);
                     await this.saveAllOutletReport(outlet.id, owner.id, start, end, null);
                     
                     const staffOutlet = await StaffModel.query()
@@ -82,7 +80,7 @@ class ReportingTask {
                         .get();
                     const staffOutletArray = Array.isArray(staffOutlet) ? staffOutlet : (staffOutlet?.toArray ? staffOutlet.toArray() : []);
                     for (const staff of staffOutletArray) {
-                        this.server.sendLogs(`Processing Staff: ${owner.name} => ${outlet.outlet_name} => ${staff.name || `Staff ${staff.id}`}`);
+                        // this.server.sendLogs(`Processing Staff: ${owner.name} => ${outlet.outlet_name} => ${staff.name || `Staff ${staff.id}`}`);
                         await this.saveAllOutletReport(outlet.id, owner.id, start, end, staff.id);
                     }
                 }
@@ -166,8 +164,8 @@ class ReportingTask {
             // Process each date
             for (const date of dates) {
                 const outletId = outletid ?? 'alloutlet';
-                this.server.sendLogs(`Processing reports for date: ${date}, owner: ${ownerName}, outlet: ${outletName}, staff: ${staffName}`);
-                await this.getDailyReport(date, outletId, staff, owner_id, ownerName, outletName, staffName);
+                // this.server.sendLogs(`Processing reports for date: ${date}, owner: ${ownerName}, outlet: ${outletName}, staff: ${staffName}`);
+                this.getDailyReport(date, outletId, staff, owner_id, ownerName, outletName, staffName);
             }
         } catch (error) {
             console.error('Error in saveAllOutletReport:', error);
@@ -176,7 +174,7 @@ class ReportingTask {
     }
     
     async getDailyReport(date, outletid, staff_id = null, owner_id) {
-        console.log(date, outletid, staff_id, owner_id)
+        // console.log(date, outletid, staff_id, owner_id)
         const generalSetting = GeneralSettingModel.query().where('owner_id', owner_id).first();
         const decimal = (generalSetting && generalSetting.currency_decimals != null) ? generalSetting.currency_decimals : 0;
         const div = Math.pow(10, decimal);
@@ -270,8 +268,8 @@ class ReportingTask {
             productQuery.whereIn('owner_id', observerAffiliateList);
             recipesQuery.whereIn('owner_id', observerAffiliateList);
         } else {
-            productQuery.whereIn('owner_id', owner_id);
-            recipesQuery.whereIn('owner_id', owner_id);
+            productQuery.where('owner_id', owner_id);
+            recipesQuery.where('owner_id', owner_id);
         }
 
         const products = (await productQuery.get()).keyBy('products_id');
@@ -279,7 +277,6 @@ class ReportingTask {
         const recipes = (await recipesQuery.get()).keyBy('id');
         const recipeOutlets = await RecipeOutletModel.query().whereIn('outlet_id', listoutletid).whereIn('recipe_id', neededRecipeIDs).get();
         const categories = await ProductCategoriesModel.query().where('owner_id', owner_id).get();
-
         let bills = [];
         let totalsales = 0;
         let fee = 0, grat = 0, vat = 0, disc = 0, rounding = 0;
@@ -360,9 +357,9 @@ class ReportingTask {
                     const count = collection.quantity;
                     const total = this.totalRevenueFromOrder(collection, bill) * count / div;
                     let category = 'Uncategorized';
-
                     if (collection.type === 'product') {
                         const product = products.get(collection.id);
+                        // console.log(product?.products_type ?? category)
                         category = product?.products_type ?? category;
                     } else if (collection.type === 'special') {
                         category = 'Special';
@@ -459,7 +456,7 @@ class ReportingTask {
             }
 
             // Always handle the base item regardless of options
-            if (item && item.type != null && item.id != null) {
+            if (item.type != null && item.id != null) {
                 if (item.type === 'product') {
                     productIDs.push(item.id);
                 } else if (item.type === 'recipe') {
@@ -477,7 +474,8 @@ class ReportingTask {
             const key = `${item.product_type}_${item.product_id}`;
 
             if (!merged[key]) {
-                merged[key] = { ...item, quantity: 1 };
+                merged[key] = item;
+                merged[key].quantity = 1;
             } else {
                 merged[key].quantity++;
             }
@@ -579,13 +577,20 @@ class ReportingTask {
     }
 
     calculateProductDiscountNull(bill) {
-        // Placeholder - implement based on your business logic
-        return 0;
+        try {
+            const order_collection = JSON.parse(bill.order_collection);
+            let total = 0;
+            total += bill.product_discount;
+            return total;
+        } catch (e) {
+            return 0;
+        }
     }
 
-    priceRounding(price, roundingSetting) {
-        // Placeholder - implement your rounding logic
-        return Math.round(price);
+    priceRounding(price, precision) {
+        // Match PHP logic: ceil($price / $precision) * $precision
+        // Always rounds UP to the next multiple of precision
+        return Math.ceil(price / precision) * precision;
     }
 
     totalSalesPriceFromBill(bill) {
@@ -661,84 +666,113 @@ class ReportingTask {
 
     unpackBillCollection(itemlist, owner_id = null, products = null, productOutlets = null, recipes = null, recipeOutlets = null, categories = null) {
         const itemList = Array.isArray(itemlist) ? itemlist : [];
-        const result = [...itemList];
 
         try {
             for (const item of itemList) {
-                if (!item.options) continue;
+                let options = null;
+                let parsedOptions = [];
 
+                const quantity = item.quantity;
+                if (!item.options) continue;
                 try {
-                    let parsedOptions = item.options.filter(dataFilter => {
+                    options = item.options;
+                    // Make sure there is only complimentary options on parsedOptions
+                    // Filter the array to only include object with "product_id" and "product_type" field
+                    parsedOptions = item.options.filter(dataFilter => {
                         return (dataFilter.product_id && dataFilter.product_type) && dataFilter.type === 'complimentary';
                     });
 
+                    // Detect if there is same item. if there is, add quantity to the quantity field
                     parsedOptions = this.mergeQuantities(parsedOptions);
 
-                    if (parsedOptions.length === 0) {
-                        continue;
-                    }
-
-                    for (const option of parsedOptions) {
-                        let product = null;
-                        let product_outlet = null;
-                        let category = null;
-
-                        if (option.product_type == "product") {
-                            product = products.get(option.product_id);
-                            product_outlet = productOutlets.find(po => po.products_id == option.product_id);
-                        } else if (option.product_type == "recipe") {
-                            product = recipes.get(option.product_id);
-                            product_outlet = recipeOutlets.find(ro => ro.recipe_id == option.product_id);
-                        }
-
-                        if (!product || !product_outlet) continue;
-
-                        category = categories.find(c => c.categories_name == product.products_type);
-                        if (!category) continue;
-
-                        const newItem = {
-                            id: option.product_id,
-                            name: product.products_name,
-                            price: 0,
-                            quantity: (option.quantity ?? 1) * item.quantity,
-                            type: option.product_type,
-                            purchprice: product_outlet.purchPrice,
-                            includedtax: product_outlet.tax,
-                            options: null,
-                            category: category.categories_name,
-                            category_bill_printer: category.bill_printer,
-                            productNotes: null,
-                            infinitystock: product_outlet.infinitystock,
-                            original_price: product_outlet.products_price,
-                            original_purchprice: product_outlet.purchPrice
-                        };
-                        result.push(newItem);
-                    }
-                } catch (err) {
-                    console.error("Error processing item:", err);
+                } catch (e) {
                     continue;
+                }
+
+                // If empty (no complimentary) just skips it. no unpack required
+                if (parsedOptions.length === 0) {
+                    continue;
+                }
+
+                for (const option of parsedOptions) {
+                    // It is a complimentary item
+                    let product = null;
+                    let product_outlet = null;
+                    let category = null;
+
+                    if (option.product_type == "product") {
+                        product = products.get(option.product_id);
+                        product_outlet = productOutlets.find(po => po.products_id == option.product_id);
+                    } else if (option.product_type == "recipe") {
+                        product = recipes.get(option.product_id);
+                        product_outlet = recipeOutlets.find(ro => ro.recipe_id == option.product_id);
+                    }
+                    
+                    if (!product || !product_outlet) continue;
+                    
+                    category = categories.find(c => c.categories_name == product.products_type);
+
+                    if (!category) continue;
+
+                    const newItem = {
+                        id: option.product_id,
+                        name: product.products_name,
+                        price: 0,
+                        quantity: option.quantity * quantity,
+                        type: option.product_type,
+                        purchprice: product_outlet.purchPrice,
+                        includedtax: product_outlet.tax,
+                        options: null,
+                        category: category.categories_name,
+                        category_bill_printer: category.bill_printer,
+                        productNotes: null,
+                        infinitystock: product_outlet.infinitystock,
+                        original_price: product_outlet.products_price,
+                        original_purchprice: product_outlet.purchPrice
+                    };
+                    itemList.push(newItem);
                 }
             }
         } catch (e) {
             console.error("Error unpacking bill collection:", e);
         }
 
-        return result;
+        return itemList;
     }
 
     async createOutletReport(outlet_id, owner_id, staff_id, date, type, data) {
-        // Implement the logic to save outlet report to database
-        // This should match the createOutletReport function from PHP
         try {
-            await OutletReportsModel.query()
-                .where('outlet_id', outlet_id)
-                .where('owner_id', owner_id)
-                .where('staff_id', staff_id)
-                .where('date', date)
-                .where('type', type)
-                .delete();
+            // Format date to Y-m-d format
+            const formattedDate = moment(date).format('YYYY-MM-DD');
 
-            await OutletReportsModel.query().insert({
+            // Build delete query
+            const orx = OutletReportsModel.query()
+                .where('owner_id', owner_id)
+                .where('date', formattedDate)
+                .where('type', type);
+
+            if (outlet_id === "alloutlet" || outlet_id === null) {
+                outlet_id = null;
+                orx.whereNull('outlet_id');
+                if (staff_id) {
+                    orx.where('staff_id', staff_id);
+                } else {
+                    orx.whereNull('staff_id');
+                }
+            } else {
+                orx.where('outlet_id', outlet_id);
+                if (staff_id) {
+                    orx.where('staff_id', staff_id);
+                } else {
+                    orx.whereNull('staff_id');
+                }
+            }
+
+            // Delete existing records
+            await orx.delete();
+
+            // Create new report
+            const report = await OutletReportsModel.query().insert({
                 outlet_id: outlet_id,
                 owner_id: owner_id,
                 staff_id: staff_id,
@@ -746,9 +780,14 @@ class ReportingTask {
                 type: type,
                 data: data
             });
+
+            this.server.sendLogs(`Created report for owner_id: ${owner_id}, outlet_id: ${outlet_id}, staff_id: ${staff_id}, date: ${date}`);
+
+            return report;
         } catch (error) {
             console.error('Error creating outlet report:', error);
-            throw error;
+            // Log the error or handle it appropriately
+            return false;
         }
     }
 }

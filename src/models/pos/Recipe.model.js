@@ -1,6 +1,6 @@
-import { Model } from "sutando";
+import { compose, Model, SoftDeletes } from "sutando";
 
-class RecipeModel extends Model {
+class RecipeModel extends compose(Model, SoftDeletes) {
     table = 'recipe';
 }
 

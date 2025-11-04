@@ -37,9 +37,7 @@ class Server {
             return;
         };
 
-        new ReportingTask(this).run('2025-10-01', '2025-11-03', 6);
-
-        // this.run();
+        this.run();
     }
 
     run() {
@@ -58,20 +56,24 @@ class Server {
         this.sendLogs('Cron jobs started successfully');
     }
 
-    every5SecondsTask() {
-        // Add your logic here for the task that runs every 5 seconds
-        this.sendLogs('Executing every 5 seconds task');
-    }
-
-    everyMinuteTask() {
-        // Add your logic here for the task that runs every minute
-        this.sendLogs('Executing every minute task');
-        new ReportingTask(this).run('2025-10-20', '2025-11-03');
-    }
-
     dailyMorningTask() {
         // Add your logic here for the task that runs daily at 5:00 AM
         this.sendLogs('Executing daily morning task at 5:00 AM');
+        const reportingTask = new ReportingTask(this);
+        
+        // Get yesterday's date
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        
+        // Get today's date
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        
+        this.sendLogs(`Running reports for yesterday (${yesterdayStr}) and today (${todayStr})`);
+        
+        // Run for yesterday and today
+        reportingTask.run(yesterdayStr, todayStr);
     }
 }
 

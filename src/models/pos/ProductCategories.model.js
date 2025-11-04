@@ -1,6 +1,6 @@
-import { Model } from "sutando";
+import { compose, Model, SoftDeletes } from "sutando";
 
-class ProductCategoriesModel extends Model {
+class ProductCategoriesModel extends compose(Model, SoftDeletes) {
     table = 'categories_products';
 }
 

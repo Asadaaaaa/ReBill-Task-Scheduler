@@ -1,6 +1,6 @@
-import { Model } from "sutando";
+import { compose, Model, SoftDeletes } from "sutando";
 
-class BillModel extends Model {
+class BillModel extends compose(Model, SoftDeletes) {
     table = 'bill';
     primaryKey = 'bill_id';
 }
