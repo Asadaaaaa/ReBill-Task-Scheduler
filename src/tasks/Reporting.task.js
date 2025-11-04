@@ -174,8 +174,7 @@ class ReportingTask {
             this.server.sendLogs(`Error in saveAllOutletReport: ${error.message}`);
         }
     }
-
-    // Helpers replicated from PHP logic (ported to JS)
+    
     async getDailyReport(date, outletid, staff_id = null, owner_id) {
         console.log(date, outletid, staff_id, owner_id)
         const generalSetting = GeneralSettingModel.query().where('owner_id', owner_id).first();
@@ -253,7 +252,7 @@ class ReportingTask {
 
         let neededProductIDs = [];
         let neededRecipeIDs = [];
-
+        
         await billQuery.chunk(chunkData, chunk => {
             for (const bill of chunk) {
                 const items = JSON.parse(bill.order_collection);
@@ -276,7 +275,148 @@ class ReportingTask {
         }
 
         const products = (await productQuery.get()).keyBy('products_id');
-        const productOutlets = ProductOutletModel.query().whereIn('outlet_id', listoutletid).whereIn('products_id', neededProductIDs).get();
+        const productOutlets = await ProductOutletModel.query().whereIn('outlet_id', listoutletid).whereIn('products_id', neededProductIDs).get();
+        const recipes = (await recipesQuery.get()).keyBy('id');
+        const recipeOutlets = await RecipeOutletModel.query().whereIn('outlet_id', listoutletid).whereIn('recipe_id', neededRecipeIDs).get();
+        const categories = await ProductCategoriesModel.query().where('owner_id', owner_id).get();
+
+        let bills = [];
+        let totalsales = 0;
+        let fee = 0, grat = 0, vat = 0, disc = 0, rounding = 0;
+        let order = [];
+        let statesOrder = [];
+
+        await billQuery.chunk(chunkData, chunk => {
+            for (const bill of chunk) {
+                bills.push(bill);
+                totalsales += bill.total / div;
+                fee += this.getFee([bill]) / div;
+                grat += this.getGrat([bill]) / div;
+                vat += this.getVat([bill]) / div;
+                disc += this.getDiscount([bill]) / div;
+                rounding += this.getRoundingOnly([bill], owner_id) / div;
+
+                statesOrder.push(bill.states);
+
+                let method = bill.payment_method ?? 'Unpaid';
+                let check = 0;
+
+                method = this.formatMerchantPaymentMethod(method, bill);
+
+                for (let keypayment = 0; keypayment < payment.length; keypayment++) {
+                    const pay = payment[keypayment];
+                    const contains = bill.payment_method && bill.payment_method.includes(' and ');
+                    
+                    if (contains === true) {
+                        method = "Split Pay";
+                        if (bill.split_payment != null && bill.split_payment != "") {
+                            const sps = JSON.parse(bill.split_payment);
+                            for (const sp of sps) {
+                                if (pay.payment_method === sp.method) {
+                                    payment[keypayment].total += this.parseBillSp(sp.amount, owner_id, generalSetting);
+                                    check = 1;
+                                }
+                            }
+                        }
+                    }
+
+                    if (bill.payment_method == null) {
+                        method = "Unpaid";
+                    }
+
+                    if (check == 0 && pay.payment_method === method) {
+                        payment[keypayment].total += this.totalRevenueFromBill(bill, owner_id) / div;
+                        check = 1;
+                    }
+                }
+
+                if (check == 0) {
+                    const contains = bill.payment_method && bill.payment_method.includes(' and ');
+                    if (contains === true) {
+                        method = "Split Pay";
+                        if (bill.split_payment != null && bill.split_payment != "") {
+                            const sps = JSON.parse(bill.split_payment);
+                            for (const sp of sps) {
+                                const existingPayment = payment.find(p => p.payment_method === sp.method);
+                                if (existingPayment) {
+                                    existingPayment.total += this.parseBillSp(sp.amount, owner_id, generalSetting);
+                                } else {
+                                    payment.push({ payment_method: sp.method, total: this.parseBillSp(sp.amount, owner_id, generalSetting) });
+                                }
+                                check = 1;
+                            }
+                        }
+                    }
+                    if (bill.payment_method == null) {
+                        method = "Unpaid";
+                    }
+                    if (check == 0) {
+                        payment.push({ payment_method: method, total: this.totalRevenueFromBill(bill, owner_id) / div });
+                    }
+                }
+
+                const collections = this.unpackBillCollection(JSON.parse(bill.order_collection), owner_id, products, productOutlets, recipes, recipeOutlets, categories);
+                for (const collection of collections) {
+                    const count = collection.quantity;
+                    const total = this.totalRevenueFromOrder(collection, bill) * count / div;
+                    let category = 'Uncategorized';
+
+                    if (collection.type === 'product') {
+                        const product = products.get(collection.id);
+                        category = product?.products_type ?? category;
+                    } else if (collection.type === 'special') {
+                        category = 'Special';
+                    } else if (collection.type === 'recipe') {
+                        const recipe = recipes.get(collection.id);
+                        category = recipe ? recipe.products_type : category;
+                    } else if (collection.type === 'custom') {
+                        category = collection.category ?? category;
+                    }
+
+                    let found = false;
+                    for (const item of order) {
+                        if (item[0] === category) {
+                            item[1] += count;
+                            item[2] += total;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        order.push([category, count, total]);
+                    }
+                }
+            }
+        });
+
+        const totaldailybills = this.getRevenue(bills, true) / div;
+        let taxordisc = 'none';
+        if ((fee + grat + vat) > 0 && disc > 0) {
+            taxordisc = 'all';
+        } else if ((fee + grat + vat) > 0) {
+            taxordisc = 'tax';
+        } else if (disc > 0) {
+            taxordisc = 'disc';
+        }
+
+        const filteredPayment = payment.filter(p => p.total != 0);
+
+        const result = [
+            order, filteredPayment, totaldailybills, totalsales,
+            taxordisc, fee, grat, vat, disc, rounding,
+            dailyfunds, statesOrder
+        ];
+
+        await this.createOutletReport(
+            (outletid === 'alloutlet' ? null : outletid),
+            owner_id,
+            staff_id,
+            date,
+            'daily',
+            JSON.stringify(result)
+        );
+
+        return result;
     }
 
     async isObserver(owner_id) {
@@ -344,6 +484,272 @@ class ReportingTask {
         });
         
         return Object.values(merged);
+    }
+
+    getFee(bill) {
+        let servicefee = 0;
+        for (const b of bill) {
+            servicefee += Math.floor(this.getPrice(b) * b.servicefee / 100);
+        }
+        return servicefee;
+    }
+
+    getGrat(bill) {
+        let gratuity = 0;
+        for (const b of bill) {
+            gratuity += Math.floor(this.getPrice(b) * b.gratuity / 100);
+        }
+        return gratuity;
+    }
+
+    getVat(bill) {
+        let vat = 0;
+        for (const b of bill) {
+            vat += Math.floor((Math.floor(this.getPrice(b))
+                + Math.floor(this.getPrice(b) * b.servicefee / 100)
+                + Math.floor(this.getPrice(b) * b.gratuity / 100))
+                * b.vat / 100);
+        }
+        return vat;
+    }
+
+    getDiscount(bill) {
+        let discount = 0;
+        for (const b of bill) {
+            discount += b.total_discount;
+            discount += this.calculateProductDiscount(b);
+        }
+        return discount;
+    }
+
+    getRoundingOnly(bill, owner_id = null) {
+        if (!Array.isArray(bill)) {
+            bill = [bill];
+        }
+
+        let rounding = 0;
+
+        for (const b of bill) {
+            const order_collection = JSON.parse(b.order_collection);
+            let isPastBill = false;
+
+            for (const item of order_collection) {
+                if (!item.discount_rules && !item.discount_type2 && item.type != 'special') {
+                    isPastBill = true;
+                    break;
+                }
+            }
+
+            b.total = Math.ceil(b.total);
+            b.totaldiscount = b.total_discount;
+            if (isPastBill) {
+                b.product_discount = this.calculateProductDiscountNull(b);
+            } else {
+                b.product_discount = this.calculateProductDiscount(b);
+            }
+            b.totalafterdiscount = Math.floor(b.total - b.totaldiscount - b.product_discount - b.total_reward);
+            b.totalgratuity = Math.floor(b.totalafterdiscount * b.gratuity / 100);
+            b.totalservicefee = Math.floor(b.totalafterdiscount * b.servicefee / 100);
+            b.totalbeforetax = Math.floor(b.totalgratuity + b.totalservicefee + b.totalafterdiscount);
+            b.totalvat = Math.floor(b.totalbeforetax * b.vat / 100);
+            b.totalaftertax = Math.floor(b.totalbeforetax + (b.totalbeforetax * b.vat / 100));
+
+            b.rounding_setting = b.rounding;
+            b.totalafterrounding = b.totalaftertax;
+            if (b.rounding != 1 && b.rounding != 0) {
+                b.totalafterrounding = this.priceRounding(b.totalaftertax, b.rounding);
+                b.rounding = b.totalafterrounding - b.totalaftertax;
+            } else {
+                b.rounding = 0;
+            }
+
+            rounding += b.rounding;
+        }
+
+        return rounding;
+    }
+
+    getPrice(bill) {
+        return bill.total || 0;
+    }
+
+    calculateProductDiscount(bill) {
+        // Placeholder - implement based on your business logic
+        return 0;
+    }
+
+    calculateProductDiscountNull(bill) {
+        // Placeholder - implement based on your business logic
+        return 0;
+    }
+
+    priceRounding(price, roundingSetting) {
+        // Placeholder - implement your rounding logic
+        return Math.round(price);
+    }
+
+    totalSalesPriceFromBill(bill) {
+        return Math.floor(bill.total - bill.total_discount - this.calculateProductDiscount(bill) - bill.total_reward);
+    }
+
+    totalServiceFeeFromBill(bill) {
+        return Math.floor(this.totalSalesPriceFromBill(bill) * bill.servicefee / 100);
+    }
+
+    totalGratuityFromBill(bill) {
+        return Math.floor(this.totalSalesPriceFromBill(bill) * bill.gratuity / 100);
+    }
+
+    totalAddedTaxFromBill(bill) {
+        return Math.floor((this.totalSalesPriceFromBill(bill)
+            + this.totalServiceFeeFromBill(bill)
+            + this.totalGratuityFromBill(bill))
+            * bill.vat / 100);
+    }
+
+    getRevenue(value, includeRounding = false) {
+        let total = 0;
+
+        for (const g of value) {
+            if (includeRounding) {
+                if (g.final_total !== undefined) {
+                    total += g.final_total;
+                    continue;
+                }
+                total += Math.ceil(this.getRoundingOnly([g]));
+            }
+            total += Math.floor(this.totalSalesPriceFromBill(g))
+                + Math.floor(this.totalServiceFeeFromBill(g))
+                + Math.floor(this.totalGratuityFromBill(g))
+                + Math.floor(this.totalAddedTaxFromBill(g));
+        }
+        return total;
+    }
+
+    totalRevenueFromBill(bill, owner_id = null) {
+        if (bill.final_total !== undefined) {
+            return bill.final_total;
+        }
+        const total = Math.floor(this.totalSalesPriceFromBill(bill))
+            + Math.floor(this.totalServiceFeeFromBill(bill))
+            + Math.floor(this.totalGratuityFromBill(bill))
+            + Math.floor(this.totalAddedTaxFromBill(bill))
+            + Math.ceil(this.getRoundingOnly([bill], owner_id));
+        return total;
+    }
+
+    totalRevenueFromOrder(order, bill) {
+        return order.price;
+    }
+
+    formatMerchantPaymentMethod(method, bill) {
+        if (method == 'Merchant') {
+            return `${bill.customer_name} (${bill.payment_method})`;
+        }
+        return method;
+    }
+
+    parseBillSp(amount, owner_id = null, setting = null) {
+        const decimal = setting?.decimal ?? 0;
+        if (decimal == 0) {
+            amount = amount.toString().replace(/\./g, "");
+            return amount.replace(/,/g, "");
+        } else {
+            return amount.toString().replace(/,/g, "");
+        }
+    }
+
+    unpackBillCollection(itemlist, owner_id = null, products = null, productOutlets = null, recipes = null, recipeOutlets = null, categories = null) {
+        const itemList = Array.isArray(itemlist) ? itemlist : [];
+        const result = [...itemList];
+
+        try {
+            for (const item of itemList) {
+                if (!item.options) continue;
+
+                try {
+                    let parsedOptions = item.options.filter(dataFilter => {
+                        return (dataFilter.product_id && dataFilter.product_type) && dataFilter.type === 'complimentary';
+                    });
+
+                    parsedOptions = this.mergeQuantities(parsedOptions);
+
+                    if (parsedOptions.length === 0) {
+                        continue;
+                    }
+
+                    for (const option of parsedOptions) {
+                        let product = null;
+                        let product_outlet = null;
+                        let category = null;
+
+                        if (option.product_type == "product") {
+                            product = products.get(option.product_id);
+                            product_outlet = productOutlets.find(po => po.products_id == option.product_id);
+                        } else if (option.product_type == "recipe") {
+                            product = recipes.get(option.product_id);
+                            product_outlet = recipeOutlets.find(ro => ro.recipe_id == option.product_id);
+                        }
+
+                        if (!product || !product_outlet) continue;
+
+                        category = categories.find(c => c.categories_name == product.products_type);
+                        if (!category) continue;
+
+                        const newItem = {
+                            id: option.product_id,
+                            name: product.products_name,
+                            price: 0,
+                            quantity: (option.quantity ?? 1) * item.quantity,
+                            type: option.product_type,
+                            purchprice: product_outlet.purchPrice,
+                            includedtax: product_outlet.tax,
+                            options: null,
+                            category: category.categories_name,
+                            category_bill_printer: category.bill_printer,
+                            productNotes: null,
+                            infinitystock: product_outlet.infinitystock,
+                            original_price: product_outlet.products_price,
+                            original_purchprice: product_outlet.purchPrice
+                        };
+                        result.push(newItem);
+                    }
+                } catch (err) {
+                    console.error("Error processing item:", err);
+                    continue;
+                }
+            }
+        } catch (e) {
+            console.error("Error unpacking bill collection:", e);
+        }
+
+        return result;
+    }
+
+    async createOutletReport(outlet_id, owner_id, staff_id, date, type, data) {
+        // Implement the logic to save outlet report to database
+        // This should match the createOutletReport function from PHP
+        try {
+            await OutletReportsModel.query()
+                .where('outlet_id', outlet_id)
+                .where('owner_id', owner_id)
+                .where('staff_id', staff_id)
+                .where('date', date)
+                .where('type', type)
+                .delete();
+
+            await OutletReportsModel.query().insert({
+                outlet_id: outlet_id,
+                owner_id: owner_id,
+                staff_id: staff_id,
+                date: date,
+                type: type,
+                data: data
+            });
+        } catch (error) {
+            console.error('Error creating outlet report:', error);
+            throw error;
+        }
     }
 }
 
